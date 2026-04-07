@@ -187,78 +187,134 @@
     </div>
   </div>
 
-  <script>
-    // 1) EDIT THIS LIST to update the scoreboard
-    const players = [
-      { name: "Aina", team: "Blue", score: 18 },
-      { name: "Kumar", team: "Red", score: 22 },
-      { name: "Haziq", team: "Blue", score: 14 },
-      { name: "Mei", team: "Green", score: 22 },
-      { name: "Sarah", team: "Red", score: 9 },
-      { name: "User1", team: "Purple", score: 10 },       
-    ];
 
-    // 2) Simple UI logic: sort, search, leader highlight
-    let sortDesc = true;
+<script>
+  // 1) Paste your Google Sheet CSV URL here:
+  // Try either /export?format=csv&gid=... ([4](https://www.highviewapps.com/blog/how-to-create-a-csv-or-excel-direct-download-link-in-google-sheets/))
+  // or /gviz/tq?tqx=out:csv&sheet=... ([5](https://stackoverflow.com/questions/33713084/download-link-for-google-spreadsheets-csv-export-with-multiple-sheets)[6](https://docs.apify.com/academy/node-js/scraping-urls-list-from-google-sheets))
+  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRC0zzmpEQ-yBGaueBvH1J6H_P-nP0VQW3QmyURVYfyYeJ__qZ8qlF_JtpNT1I6oeokSVhj44aX45AS/pub?gid=0&single=true&output=csv";
 
-    const rowsEl = document.getElementById("rows");
-    const searchEl = document.getElementById("search");
-    const toggleSortEl = document.getElementById("toggleSort");
-    const lastUpdatedEl = document.getElementById("lastUpdated");
+  let players = [];
+  let sortDesc = true;
 
-    function render() {
-      const q = (searchEl.value || "").toLowerCase().trim();
+  const rowsEl = document.getElementById("rows");
+  const searchEl = document.getElementById("search");
+  const toggleSortEl = document.getElementById("toggleSort");
+  const lastUpdatedEl = document.getElementById("lastUpdated");
 
-      // filter
-      const filtered = players.filter(p =>
-        p.name.toLowerCase().includes(q) || p.team.toLowerCase().includes(q)
-      );
+  async function loadScores() {
+    const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to load CSV: " + res.status);
+    const csvText = await res.text();
 
-      // sort
-      filtered.sort((a,b) => sortDesc ? (b.score - a.score) : (a.score - b.score));
+    players = csvToPlayers(csvText);
+    render();
+  }
 
-      // leader detection (supports ties)
-      const topScore = filtered.length ? Math.max(...filtered.map(p => p.score)) : null;
+  // Simple CSV parser (handles commas + quoted values)
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], cell = "", inQuotes = false;
 
-      rowsEl.innerHTML = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const next = text[i + 1];
 
-      filtered.forEach((p, idx) => {
-        const isLeader = topScore !== null && p.score === topScore;
-        const tr = document.createElement("tr");
-        if (isLeader) tr.classList.add("leader");
+      if (ch === '"' && inQuotes && next === '"') { cell += '"'; i++; continue; }
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
 
-        tr.innerHTML = `
-          <td>${idx + 1}</td>
-          <td>${escapeHtml(p.name)}</td>
-          <td>${escapeHtml(p.team)}</td>
-          <td class="score">${p.score}</td>
-          <td>
-            <span class="badge ${isLeader ? "lead" : ""}">
-              ${isLeader ? "Leading" : "—"}
-            </span>
-          </td>
-        `;
-        rowsEl.appendChild(tr);
-      });
-
-      lastUpdatedEl.textContent = "Last updated: " + new Date().toLocaleString();
+      if (ch === "," && !inQuotes) { row.push(cell); cell = ""; continue; }
+      if ((ch === "\n" || ch === "\r") && !inQuotes) {
+        if (ch === "\r" && next === "\n") i++;
+        row.push(cell);
+        if (row.length > 1 || row[0] !== "") rows.push(row);
+        row = []; cell = "";
+        continue;
+      }
+      cell += ch;
     }
 
-    function escapeHtml(str) {
-      return String(str).replace(/[&<>"']/g, s => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-      }[s]));
+    if (cell.length || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+
+  function csvToPlayers(csvText) {
+    const rows = parseCSV(csvText).filter(r => r.some(x => (x || "").trim() !== ""));
+    if (rows.length === 0) return [];
+
+    const header = rows[0].map(h => (h || "").trim().toLowerCase());
+    const nameIdx = header.indexOf("name");
+    const teamIdx = header.indexOf("team");
+    const scoreIdx = header.indexOf("score");
+
+    if (nameIdx === -1 || scoreIdx === -1) {
+      throw new Error("CSV must have headers: name, team, score");
     }
 
-    toggleSortEl.addEventListener("click", () => {
-      sortDesc = !sortDesc;
-      toggleSortEl.textContent = sortDesc ? "Sort: High → Low" : "Sort: Low → High";
-      render();
+    return rows.slice(1).map(r => ({
+      name: (r[nameIdx] || "").trim(),
+      team: (r[teamIdx] || "").trim(),
+      score: Number((r[scoreIdx] || "0").trim()) || 0
+    })).filter(p => p.name);
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, s => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[s]));
+  }
+
+  function render() {
+    const q = (searchEl.value || "").toLowerCase().trim();
+
+    const filtered = players.filter(p =>
+      p.name.toLowerCase().includes(q) || p.team.toLowerCase().includes(q)
+    );
+
+    filtered.sort((a,b) => sortDesc ? (b.score - a.score) : (a.score - b.score));
+
+    const topScore = filtered.length ? Math.max(...filtered.map(p => p.score)) : null;
+    rowsEl.innerHTML = "";
+
+    filtered.forEach((p, idx) => {
+      const isLeader = topScore !== null && p.score === topScore;
+      const tr = document.createElement("tr");
+      if (isLeader) tr.classList.add("leader");
+
+      tr.innerHTML = `
+        <td>${idx + 1}</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.team)}</td>
+        <td class="score">${p.score}</td>
+        <td>
+          <span class="badge ${isLeader ? "lead" : ""}">
+            ${isLeader ? "Leading" : "—"}
+          </span>
+        </td>
+      `;
+      rowsEl.appendChild(tr);
     });
 
-    searchEl.addEventListener("input", render);
+    lastUpdatedEl.textContent = "Last updated: " + new Date().toLocaleString();
+  }
 
+  toggleSortEl.addEventListener("click", () => {
+    sortDesc = !sortDesc;
+    toggleSortEl.textContent = sortDesc ? "Sort: High → Low" : "Sort: Low → High";
     render();
-  </script>
+  });
+
+  searchEl.addEventListener("input", render);
+
+  // Load on startup
+  loadScores().catch(err => {
+    console.error(err);
+    rowsEl.innerHTML = `<tr><td colspan="5">Failed to load scores. Check the CSV link + sharing settings.</td></tr>`;
+  });
+
+  // Optional: auto-refresh every 60 seconds
+  setInterval(() => loadScores().catch(()=>{}), 60000);
+</script>
+
 </body>
 </html>
